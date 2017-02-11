@@ -55,8 +55,8 @@
     (testing "allows \"Robert'); DROP TABLE students;--\" to be safely inserted"
       (let [bobby-tables "Robert'); DROP TABLE students;--"
             color (ks/rand-str :alpha-lower 2)]
-        (jdbc/execute! test-db [(format "INSERT INTO authors (name, favorite_color) VALUES (%s, '%s')"
-                                        (pg-sql-escape bobby-tables) color)])
+        (jdbc/execute! test-db [(format "INSERT INTO authors (name, favorite_color) VALUES ('%s', '%s')"
+                                        (escape-literal bobby-tables) color)])
         (is (= {:name bobby-tables}
                (first (jdbc/query test-db ["SELECT name FROM authors WHERE favorite_color = ?"
                                            color]))))
@@ -68,9 +68,9 @@
                          ""
                          (ks/rand-str :alpha 5))
               malicious-string (str "$" rand-tag "$); DROP TABLE jdbc_util_test;--")
-              escaped (pg-sql-escape malicious-string)]
+              escaped (escape-literal malicious-string)]
           (is (= malicious-string
-                 (-> (jdbc/query test-db [(format "SELECT %s AS string" escaped)])
+                 (-> (jdbc/query test-db [(format "SELECT '%s' AS string" escaped)])
                    first
                    :string))))))
 
@@ -78,7 +78,7 @@
       (tc/quick-check
         10000 ; 10k
         (tc-prop/for-all [s tc-gen/string]
-          (let [escaped (pg-sql-escape s)
+          (let [escaped (escape-literal s)
                 [delim0 tag0] (re-find #"^\$([^$]+)\$" escaped)
                 [delim1 tag1] (re-find #"\$([^$]+)\$$" escaped)
                 delim-occurrences (re-seq (re-pattern (str "\\$" tag0 "\\$")) escaped)]
@@ -100,33 +100,6 @@
        (if (<= insertions 1)
          s'
          (recur s' (dec insertions)))))))
-
-(deftest safe-pg-identifier?-test
-  (testing "safe-pg-identifier?"
-    (testing "rejects names with symbols besides underscores and hyphens"
-      (let [bad-symbols (-> (:symbols ks/ascii-character-sets)
-                          set
-                          (disj \- \_)
-                          vec)
-            insert-bad-symbols (randomly-insert-from bad-symbols)]
-        (tc/quick-check
-          10000
-          ;; shrinking doesn't work because of this here fmap of a random fn
-          (tc-prop/for-all [s (tc-gen/fmap insert-bad-symbols tc-gen/string-alphanumeric)]
-            (false? (safe-pg-identifier? s))))))
-
-    (testing "accepts names with digits, underscores, hyphens, and alphabetical characters"
-      (are [nombre] (true? (safe-pg-identifier? nombre))
-        "zaphod42"
-        "righteous-lisp-style"
-        "profane_c_convention"
-        "αβγ"
-        "Přílišžluťoučkýkůňúpělďábelskéódy"
-        "YxskaftbudgevårWC-zonmöIQ-hjälp"
-        "Эхчужакобщийсъёмценшляпюфтьвдрызг"
-        "หัดอภัยเหมือนกีฬาอัชฌาสัย"
-        "लाल"
-        "石室诗士施氏嗜狮誓食十狮"))))
 
 (deftest db-up?-test
   (testing "db-up?"
@@ -160,12 +133,6 @@
       (jdbc/execute! test-db [(format "DROP DATABASE \"%s\"" rand-db)]
                      {:transaction? false}))
 
-    (testing "appears to use `safe-pg-identifier?` to screen"
-      (testing "DB names"
-        (is (thrown? AssertionError (create-db! test-db "what\"quote" "guccifer"))))
-      (testing "user names"
-        (is (thrown? AssertionError (create-db! test-db "school" "Robert'); DROP TABLE students;")))))
-
     (testing "throws an error when given a db that already exists"
       (let [rand-db (rand-db-name)]
         (create-db! test-db rand-db (:user test-db))
@@ -184,9 +151,6 @@
         (is (nil? (drop-db! test-db rand-db)))
         (is (false? (db-exists? test-db rand-db)))))
 
-    (testing "appears to use `safe-pg-identifier?` to screen DB names"
-      (is (thrown? AssertionError (drop-db! test-db "sad-times;_;"))))
-
     (testing "doesn't throw when given a database that doesn't exist"
       (is (nil? (drop-db! test-db "no-such-database"))))))
 
@@ -204,10 +168,6 @@
         (create-user! test-db rand-user "badpassword")
         (is (true? (user-exists? test-db rand-user)))
         (jdbc/execute! test-db [(format "DROP USER \"%s\"" rand-user)])))
-
-    (testing "appears to use `safe-pg-identifier?` to screen user names"
-      (is (thrown? AssertionError
-                   (create-user! test-db "eve;PATH=/usr/bin/compromised:$PATH" "123"))))
 
     (testing "throws an error when given a user that already exists"
       (let [rand-user (rand-username)]
@@ -233,9 +193,6 @@
         (is (true? (user-exists? test-db rand-user)))
         (drop-user! test-db rand-user)
         (is (false? (user-exists? test-db rand-user)))))
-
-    (testing "appears to use `safe-pg-identifier?` to screen user names"
-      (is (thrown? AssertionError (drop-user! test-db "mallory$(rm -rf /)"))))
 
     (testing "doesn't throw when given a user that doesn't exist"
       (is (nil? (drop-user! test-db (rand-username)))))))
